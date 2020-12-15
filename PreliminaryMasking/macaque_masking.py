@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
 
+# Code update: TingXu 20201119, Add initial mask or edit mask option
+# Note: if read in the initial mask path via docker, then need to modify docker/app/run.py
+# For now, just place the initial/edited mask in the output working directory  as follow
+# sub/ses/anat/files/masks/T1w_average_mask_init.nii.gz'
+# sub/ses/anat/files/masks/T1w_average_mask_edit.nii.gz'
+# T1w_average (by default) should be aligned to the first T1w input
+
+
 import argparse
 import os
 import subprocess
@@ -73,6 +81,9 @@ def interface(path, t1w_images, t2w_images, functional_images, dfm_image,
         'ANTSPATH': os.environ['ANTSPATH'],
         't1w': os.path.join(wd, 'T1w_average.nii.gz'),
         't2w': os.path.join(wd, 'T2w_average.nii.gz'),
+        't1w_mask_init': os.path.join(wd, 'T1w_average_mask_init.nii.gz'),
+        't1w_brain_init': os.path.join(wd, 'T1w_average_brain_init.nii.gz'),
+        't1w_mask_edit': os.path.join(wd, 'T1w_average_mask_edit.nii.gz'),
         'atlas_head': study_atlas_head,
         'atlas_brain': study_atlas_brain,
         't1w2atl': os.path.join(wd, 't1w2atl.mat'),
@@ -114,10 +125,22 @@ def interface(path, t1w_images, t2w_images, functional_images, dfm_image,
     # @TODO initial N4BiasCorrection is necessary?
 
     # mask images using ants
-    rigid_align = '{FSLDIR}/bin/flirt -v -dof 6 -in {t1w} -ref {atlas_head} ' \
-                  '-out {t1w_in_atl} -omat {t1w2atl} -interp spline ' \
-                  '-searchrx -30 30 -searchry -30 30 -searchrz -30 ' \
-                  '30'.format(**kwargs)
+    if not os.path.isfile(kwargs['t1w_mask_init']):
+        rigid_align = '{FSLDIR}/bin/flirt -v -dof 6 -in {t1w} -ref {atlas_head} ' \
+                    '-out {t1w_in_atl} -omat {t1w2atl} -interp spline ' \
+                    '-searchrx -30 30 -searchry -30 30 -searchrz -30 ' \
+                    '30'.format(**kwargs)
+    else:
+        create_init_brain = '{FSLDIR}/bin/fslmaths {t1w} -mas {t1w_mask_init} ' \
+                    '{t1w_brain_init}'.format(**kwargs)
+        rigid_align_init = '{FSLDIR}/bin/flirt -v -dof 6 -in {t1w_brain_init} -ref {atlas_brain} ' \
+                    '-omat {t1w2atl} ' \
+                    '-searchrx -30 30 -searchry -30 30 -searchrz -30 ' \
+                    '30'.format(**kwargs)
+        apply_rigid_align = '{FSLDIR}/bin/flirt -v -in {t1w} -ref {atlas_head} ' \
+                    '-out {t1w_in_atl} -interp spline ' \
+                    '-applyxfm -init {t1w2atl}'.format(**kwargs)
+
     create_mask = '{FSLDIR}/bin/fslmaths {atlas_brain} -bin {' \
                   'atlas_mask}'.format(**kwargs)
     ants_warp = '{ANTSPATH}/ANTS 3 -m  CC[{t1w_in_atl},{atlas_head},1,5] ' \
@@ -133,17 +156,39 @@ def interface(path, t1w_images, t2w_images, functional_images, dfm_image,
     rigid_align_mask = '{FSLDIR}/bin/flirt -interp nearestneighbour -in {' \
                        'warp_mask} -ref {t1w} -o {brain_mask} -applyxfm ' \
                        '-init {atl2t1w}'.format(**kwargs)
-    mask_t1w = 'fslmaths {t1w} -mas {brain_mask} {t1w_brain}'.format(**kwargs)
-    t1w2t2w_rigid = 'flirt -dof 6 -cost mutualinfo -in {t1w} -ref {t2w} ' \
-                    '-omat {t1w2t2w}'.format(**kwargs)
-    t1w2t2w_mask = 'flirt -in {brain_mask} -interp nearestneighbour -ref {' \
-                   't2w} -o {t2w_brain_mask} -applyxfm -init {' \
-                   't1w2t2w}'.format(**kwargs)
-    mask_t2w = 'fslmaths {t2w} -mas {t2w_brain_mask} ' \
-               '{t2w_brain}'.format(**kwargs)
-    cmdlist += [rigid_align, create_mask, ants_warp, apply_ants_warp,
-                inverse_mat, rigid_align_mask, mask_t1w, t1w2t2w_rigid,
-                t1w2t2w_mask, mask_t2w]
+
+    if not os.path.isfile(kwargs['t1w_mask_edit']):
+        mask_t1w = 'fslmaths {t1w} -mas {brain_mask} {t1w_brain}'.format(**kwargs)
+        t1w2t2w_rigid = 'flirt -dof 6 -cost mutualinfo -in {t1w} -ref {t2w} ' \
+                        '-omat {t1w2t2w}'.format(**kwargs)
+        t1w2t2w_mask = 'flirt -in {brain_mask} -interp nearestneighbour -ref {' \
+                    't2w} -o {t2w_brain_mask} -applyxfm -init {' \
+                    't1w2t2w}'.format(**kwargs)
+        mask_t2w = 'fslmaths {t2w} -mas {t2w_brain_mask} ' \
+                '{t2w_brain}'.format(**kwargs)
+    else:
+        mask_t1w = 'fslmaths {t1w} -mas {t1w_mask_edit} {t1w_brain}'.format(**kwargs)
+        t1w2t2w_rigid = 'flirt -dof 6 -cost mutualinfo -in {t1w} -ref {t2w} ' \
+                        '-omat {t1w2t2w}'.format(**kwargs)
+        t1w2t2w_mask = 'flirt -in {t1w_mask_edit} -interp nearestneighbour -ref {' \
+                    't2w} -o {t2w_brain_mask} -applyxfm -init {' \
+                    't1w2t2w}'.format(**kwargs)
+        mask_t2w = 'fslmaths {t2w} -mas {t2w_brain_mask} ' \
+                '{t2w_brain}'.format(**kwargs)
+
+    if os.path.isfile(kwargs['t1w_mask_init']):
+        cmdlist += [create_init_brain, rigid_align_init, apply_rigid_align, 
+                    create_mask, ants_warp, apply_ants_warp,
+                    inverse_mat, rigid_align_mask, mask_t1w, t1w2t2w_rigid,
+                    t1w2t2w_mask, mask_t2w]
+    elif os.path.isfile(kwargs['t1w_mask_edit']):
+        cmdlist += [mask_t1w, t1w2t2w_rigid,
+                    t1w2t2w_mask, mask_t2w]
+    else:
+        cmdlist += [rigid_align, create_mask, ants_warp, apply_ants_warp,
+                    inverse_mat, rigid_align_mask, mask_t1w, t1w2t2w_rigid,
+                    t1w2t2w_mask, mask_t2w]
+
 
     # create fieldmap mask and bet mask if applicable
     if dfm_image and dfm_image.upper() != 'NONE':
