@@ -253,6 +253,8 @@ for TXw in ${Modalities} ; do
   else
     echo "ONLY ONE AVERAGE FOUND: COPYING"
     ${RUN} ${FSLDIR}/bin/imcp ${TXwFolder}/${TXwImage}1_gdc ${TXwFolder}/${TXwImage}
+    ${FSLDIR}/bin/fslmaths ${TXwFolder}/${TXwImage}_brain -bin ${TXwFolder}/${TXwImage}_mask
+    ${FSLDIR}/bin/fslmaths ${TXwFolder}/${TXwImage} -mas ${TXwFolder}/${TXwImage}_mask ${TXwFolder}/${TXwImage}_brain
   fi
 
 #### ACPC align T1w and T2w image to 0.7mm MNI T1wTemplate to create native volume space ####
